@@ -7,6 +7,7 @@
 #pragma once
 
 #include <iostream>
+#include <chrono>
 
 #ifdef __MACH__
 #include <sys/types.h>
@@ -49,21 +50,21 @@ inline int timer_set(TimerStore store, TimerId tid, std::chrono::milliseconds va
 #else // __MACH__
 
 #include <sys/timerfd.h>
-typedef void TimerStore;
+typedef int TimerStore;
 typedef int TimerId;
 typedef eventfd_t EventValue;
 
 // Obsolete on linux
 inline TimerStore timer_store() {
-    return;
+    return 0;
 }
 
-inline TimerId timer_init(unsigned int initval, int flags, TimerId tid) {
+inline TimerId timer_init(unsigned int initval, int flags) {
     return timerfd_create(initval, flags);
 }
 
 // On Linux, store will be ignored, tid is the file descriptor.
-inline int timer_disarm(TimerStore store, TimerId tid) {
+inline int timer_disarm(TimerId tid) {
     itimerspec spec;
     spec.it_interval.tv_sec = 0;
     spec.it_interval.tv_nsec = 0;
@@ -74,7 +75,7 @@ inline int timer_disarm(TimerStore store, TimerId tid) {
     return timerfd_settime(tid, 0, &spec, 0);
 }
 
-inline int timer_set(TimerStore store, TimerId tid, std::chrono::milliseconds value) {
+inline int timer_set(TimerId tid, std::chrono::milliseconds value) {
     itimerspec spec;
     spec.it_interval.tv_sec = 0;
     spec.it_interval.tv_nsec = 0;
@@ -89,7 +90,7 @@ inline int timer_set(TimerStore store, TimerId tid, std::chrono::milliseconds va
       spec.it_value.tv_nsec = 0;
     }
     
-    return timerfd_settime(tid, flags, new_value, old_value);
+    return timerfd_settime(tid, 0, &spec, NULL);
 }
 
 #endif // __MACH__

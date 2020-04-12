@@ -13,19 +13,19 @@
 #ifdef __MACH__
     #define DISARM(t) timer_disarm(kq, uid)
 #else
-    #define DISARM(t) timer_disarm(0, t);
+    #define DISARM(t) timer_disarm(t)
 #endif
 
 #ifdef __MACH__
     #define ARM(t, d) timer_set(kq, t, d)
 #else
-    #define ARM(t, d) timer_set(0, t, d)
+    #define ARM(t, d) timer_set(t, d)
 #endif
 
 #ifdef __MACH__
     #define INIT(c, f) timer_init(c, f, uid)
 #else
-    #define INIT(c, f) timer_init(0, t)
+    #define INIT(c, f) timer_init(c, f)
 #endif
 
 namespace Pistache {

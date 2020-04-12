@@ -335,7 +335,7 @@ void Epoll::addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
   TRY(epoll_ctl(poll_id, EPOLL_CTL_ADD, fd, &ev));
 }
 
-void Epoll::removeFd(Fd fd) {
+void Epoll::removeFd(Fd fd, Flags<NotifyOn> interest) {
   struct epoll_event ev;
   TRY(epoll_ctl(poll_id, EPOLL_CTL_DEL, fd, &ev));
 }

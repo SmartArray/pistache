@@ -12,8 +12,13 @@
     #include <sys/uio.h>
     // getrusage
     #include <sys/resource.h>
+
+    #define TIMER_SET(fd, event) timer_set(kq, fd, event)
 #else
+    #include <sys/sendfile.h>
     #include <sys/time.h>
+
+    #define TIMER_SET(fd, event) timer_set(fd, event)
 #endif
 
 #include <sys/resource.h>
@@ -353,7 +358,7 @@ void Transport::armTimerMsImpl(TimerEntry entry) {
     return;
   }
 
-  int res = timer_set(kq, entry.fd, entry.value);
+  int res = TIMER_SET(entry.fd, entry.value);
   if (res == -1) {
     entry.deferred.reject(Pistache::Error::system("Could not set timer time"));
     return;

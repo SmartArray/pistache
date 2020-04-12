@@ -232,7 +232,7 @@ public:
 
   template <typename Duration> void arm(Duration duration) {
     Async::Promise<uint64_t> p([=](Async::Deferred<uint64_t> deferred) {
-      timerFd = TRY_RET(timer_init(CLOCK_MONOTONIC, TFD_NONBLOCK, 1));
+      timerFd = TRY_RET(timer_init(CLOCK_MONOTONIC, TFD_NONBLOCK));
       transport->armTimer(timerFd, duration, std::move(deferred));
     });
 
