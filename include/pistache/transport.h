@@ -29,7 +29,11 @@ public:
   explicit Transport(const std::shared_ptr<Tcp::Handler> &handler);
   Transport(const Transport &) = delete;
   Transport &operator=(const Transport &) = delete;
-
+    
+#ifdef __MACH__
+  ~Transport() { close(kq); }
+#endif
+    
   void init(const std::shared_ptr<Tcp::Handler> &handler);
 
   void registerPoller(Polling::Epoll &poller) override;
@@ -68,6 +72,10 @@ public:
   void disarmTimer(Fd fd);
 
   std::shared_ptr<Aio::Handler> clone() const override;
+    
+#ifdef __MACH__
+  int kq;
+#endif
 
 private:
   enum WriteStatus { FirstTry, Retry };

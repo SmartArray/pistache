@@ -22,6 +22,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifndef MSG_MORE
+#define MSG_MORE 0
+#endif
+
 namespace Pistache {
 namespace Http {
 
@@ -921,7 +925,7 @@ void Handler::onInput(const char *buffer, size_t len,
     }
 
     auto state = parser.parse();
-
+      
     if (state == Private::State::Done) {
       ResponseWriter response(transport(), parser.request, this, peer);
 

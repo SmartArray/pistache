@@ -6,10 +6,27 @@
 
 #include <pistache/os.h>
 #include <pistache/timer_pool.h>
+#include <pistache/timer.h>
 
 #include <cassert>
 
-#include <sys/timerfd.h>
+#ifdef __MACH__
+    #define DISARM(t) timer_disarm(kq, uid)
+#else
+    #define DISARM(t) timer_disarm(0, t);
+#endif
+
+#ifdef __MACH__
+    #define ARM(t, d) timer_set(kq, t, d)
+#else
+    #define ARM(t, d) timer_set(0, t, d)
+#endif
+
+#ifdef __MACH__
+    #define INIT(c, f) timer_init(c, f, uid)
+#else
+    #define INIT(c, f) timer_init(0, t)
+#endif
 
 namespace Pistache {
 
@@ -30,21 +47,13 @@ Fd TimerPool::Entry::fd() const {
 
 void TimerPool::Entry::initialize() {
   if (fd_ == -1) {
-    fd_ = TRY_RET(timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK));
+    fd_ = TRY_RET(INIT(CLOCK_MONOTONIC, TFD_NONBLOCK));
   }
 }
 
 void TimerPool::Entry::disarm() {
   assert(fd_ != -1);
-
-  itimerspec spec;
-  spec.it_interval.tv_sec = 0;
-  spec.it_interval.tv_nsec = 0;
-
-  spec.it_value.tv_sec = 0;
-  spec.it_value.tv_nsec = 0;
-
-  TRY(timerfd_settime(fd_, 0, &spec, 0));
+  TRY(DISARM(fd_));
 }
 
 void TimerPool::Entry::registerReactor(const Aio::Reactor::Key &key,
@@ -56,25 +65,25 @@ void TimerPool::Entry::registerReactor(const Aio::Reactor::Key &key,
 }
 
 void TimerPool::Entry::armMs(std::chrono::milliseconds value) {
-  itimerspec spec;
-  spec.it_interval.tv_sec = 0;
-  spec.it_interval.tv_nsec = 0;
-
-  if (value.count() < 1000) {
-    spec.it_value.tv_sec = 0;
-    spec.it_value.tv_nsec =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(value).count();
-  } else {
-    spec.it_value.tv_sec =
-        std::chrono::duration_cast<std::chrono::seconds>(value).count();
-    spec.it_value.tv_nsec = 0;
-  }
-  TRY(timerfd_settime(fd_, 0, &spec, 0));
+  TRY(ARM(fd_, value));
 }
 
 TimerPool::TimerPool(size_t initialSize) {
+#ifdef __MACH__
+  // Create a kqueue on BSD
+  kq = timer_store();
+#endif
+    
   for (size_t i = 0; i < initialSize; ++i) {
-    timers.push_back(std::make_shared<TimerPool::Entry>());
+    auto entry = std::make_shared<TimerPool::Entry>();
+      
+#ifdef __MACH__
+      // Assign kq and uid to newly created entry.
+      entry->uid = i;
+      entry->kq = kq;
+#endif
+      
+    timers.push_back(entry);
   }
 }
 

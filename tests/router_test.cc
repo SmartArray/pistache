@@ -172,23 +172,29 @@ TEST(router_test, test_notfound_exactly_once) {
                 response.send(Pistache::Http::Code::Ok, "kupo!\n");
                 return Pistache::Rest::Route::Result::Ok;
               });
-
+    
   endpoint->setHandler(router.handler());
   endpoint->serveThreaded();
   const auto bound_port = endpoint->getPort();
   httplib::Client client("localhost", bound_port);
+    
+    std::cout << "ttt2, port = " << endpoint->getPort() << std::endl;
 
   // Verify that the notFound handler is NOT called when route is found.
   count_not_found = count_found = 0;
   client.Get("/moogle");
   ASSERT_EQ(count_found, 1);
   ASSERT_EQ(count_not_found, 0);
+    
+    std::cout << "ttt3" << std::endl;
 
   // Verify simple solution to bug #323 (one bad url triggered 2 routes).
   count_not_found = count_found = 0;
   client.Get("/kefka");
   ASSERT_EQ(count_found, 0);
   ASSERT_EQ(count_not_found, 1);
+    
+    std::cout << "ttt4" << std::endl;
 
   // Anal test, 2 calls = 2 route hits.
   count_not_found = count_found = 0;
@@ -196,6 +202,8 @@ TEST(router_test, test_notfound_exactly_once) {
   client.Get("/wedge");
   ASSERT_EQ(count_found, 0);
   ASSERT_EQ(count_not_found, 2);
+    
+    std::cout << "ttt5" << std::endl;
 
   endpoint->shutdown();
 }

@@ -2,7 +2,7 @@
 
 #define CUSTOM_STRING_VIEW 1
 
-#if __cplusplus >= 201703L
+#if __cplusplus >= 201703L || defined(__MACH__)
 #if defined(__has_include)
 #if __has_include(<string_view>)
 #undef CUSTOM_STRING_VIEW

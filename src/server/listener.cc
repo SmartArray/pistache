@@ -15,9 +15,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <sys/epoll.h>
 #include <sys/socket.h>
-#include <sys/timerfd.h>
 #include <sys/types.h>
 
 #include <chrono>
@@ -26,6 +24,11 @@
 
 #include <cerrno>
 #include <signal.h>
+
+// Set SOL_TCP to standard IPPROTO_TCP
+#if !defined(SOL_TCP) && defined(IPPROTO_TCP)
+#define SOL_TCP IPPROTO_TCP
+#endif
 
 #ifdef PISTACHE_USE_SSL
 
@@ -212,14 +215,18 @@ void Listener::run() {
     int ready_fds = poller.poll(events);
 
     if (ready_fds == -1) {
-      throw Error::system("Polling");
+      throw Error::system("Polling"); // YOSHI
     }
     for (const auto &event : events) {
-      if (event.tag == shutdownFd.tag())
+      if (event.tag == shutdownFd.tag()) {
+        std::cout << "SHUTDOWN" << std::endl; // YOSHI
         return;
+      }
 
       if (event.flags.hasFlag(Polling::NotifyOn::Read)) {
         auto fd = event.tag.value();
+std::cout << "fd=" << fd << ", listen_fd=" << listen_fd << std::endl; // YOSHI
+        
         if (static_cast<ssize_t>(fd) == listen_fd) {
           try {
             handleNewConnection();
@@ -305,7 +312,7 @@ Options Listener::options() const { return options_; }
 void Listener::handleNewConnection() {
   struct sockaddr_in peer_addr;
   int client_fd = acceptConnection(peer_addr);
-
+  
   void *ssl = nullptr;
 
 #ifdef PISTACHE_USE_SSL
@@ -359,7 +366,7 @@ void Listener::dispatchPeer(const std::shared_ptr<Peer> &peer) {
   auto handlers = reactor_.handlers(transportKey);
   auto idx = peer->fd() % handlers.size();
   auto transport = std::static_pointer_cast<Transport>(handlers[idx]);
-
+  
   transport->handleNewPeer(peer);
 }
 

@@ -31,7 +31,7 @@ if (PISTACHE_BUILD_TESTS)
     find_program(CTEST_COVERAGE_COMMAND NAMES gcov)
     find_program(CMAKE_CXX_CPPCHECK NAMES cppcheck)
 
-    if (CMAKE_CXX_CPPCHECK)
+    if (!CMAKE_CXX_CPPCHECK)
         message("-- Cppcheck found " ${CMAKE_CXX_CPPCHECK})
         list(
             APPEND CMAKE_CXX_CPPCHECK

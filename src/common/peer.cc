@@ -76,6 +76,7 @@ int Peer::fd() const {
 }
 
 void Peer::putData(std::string name, std::shared_ptr<Http::Parser> data) {
+    std::cout << "putData(name=" << name << ")" << std::endl; // YOSHI
   auto it = data_.find(name);
   if (it != std::end(data_)) {
     throw std::runtime_error("The data already exists");

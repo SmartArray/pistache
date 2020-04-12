@@ -9,6 +9,8 @@
 #include <pistache/common.h>
 #include <pistache/config.h>
 #include <pistache/flags.h>
+#include <pistache/event.h>
+#include <pistache/timer.h>
 
 #include <bitset>
 #include <chrono>
@@ -16,6 +18,16 @@
 #include <vector>
 
 #include <sched.h>
+
+#ifdef __MACH__
+typedef struct {
+    uint64_t count;
+} cpu_set_t;
+
+static inline void CPU_ZERO(cpu_set_t* s) { s->count = 0; }
+static inline void CPU_SET(uint64_t num, cpu_set_t* s) { s->count |= (1 << num); }
+static inline int CPU_ISSET(uint64_t num, cpu_set_t* s) { return static_cast<int>(s->count & (1 << num)); }
+#endif
 
 namespace Pistache {
 
@@ -99,7 +111,7 @@ public:
   void addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag,
                     Mode mode = Mode::Level);
 
-  void removeFd(Fd fd);
+  void removeFd(Fd fd, Flags<NotifyOn> interest);
   void rearmFd(Fd fd, Flags<NotifyOn> interest, Tag tag,
                Mode mode = Mode::Level);
 
@@ -109,7 +121,7 @@ public:
 private:
   static int toEpollEvents(const Flags<NotifyOn> &interest);
   static Flags<NotifyOn> toNotifyOn(int events);
-  Fd epoll_fd;
+  Fd poll_id;
 };
 
 } // namespace Polling
@@ -130,7 +142,7 @@ public:
   bool tryRead() const;
 
 private:
-  Fd event_fd;
+  EventId event_id;
 };
 
 } // namespace Pistache

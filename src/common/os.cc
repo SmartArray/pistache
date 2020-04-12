@@ -7,9 +7,16 @@
 #include <pistache/config.h>
 #include <pistache/os.h>
 
-#include <fcntl.h>
+#ifdef __MACH__
+#include <sys/types.h>
+#include <sys/event.h>
+#include <sys/time.h>
+#else // __MACH__
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#endif // __MACH__
+
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -116,16 +123,194 @@ cpu_set_t CpuSet::toPosix() const {
   return cpu_set;
 }
 
+#ifdef __MACH__
+//#include <pistache/polling_compat.h>
+    
 namespace Polling {
+    
+    Event::Event(Tag _tag) : flags(), fd(-1), tag(_tag) {}
+    
+    Epoll::Epoll()
+    : poll_id([&]() {
+        return TRY_RET(kqueue());
+    }()) {}
+    
+    Epoll::~Epoll() {
+        if (poll_id >= 0) {
+            close(poll_id);
+        }
+    }
+    
+    void Epoll::addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
+std::cout << "addFd fd=" << fd << " with value = " << tag.value_ << std::endl;  // YOSHI
+        struct kevent ke;
+        uint16_t flags = EV_ADD | EV_EOF | EV_ENABLE;
+        uint16_t filter = static_cast<uint16_t>(toEpollEvents(interest));
+        
+        if (mode == Mode::Edge) flags |= EV_CLEAR;
+        
+        EV_SET(&ke, fd, filter, flags, 0, 0, (void*) tag.value_);
+        TRY(kevent(poll_id, &ke, 1, NULL, 0, NULL));
+    }
+    
+    void Epoll::addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
+//        struct epoll_event ev;
+//        ev.events = toEpollEvents(interest);
+//        ev.events |= EPOLLONESHOT;
+//        if (mode == Mode::Edge)
+//        ev.events |= EPOLLET;
+//        ev.data.u64 = tag.value_;
+//
+//        TRY(epoll_ctl(poll_id, EPOLL_CTL_ADD, fd, &ev));
+std::cout << "addFdOneShot with value = " << tag.value_ << std::endl;  // YOSHI
+        
+        struct kevent ke;
+        uint16_t flags = EV_ADD | EV_EOF | EV_ENABLE;
+        uint16_t filter = static_cast<uint16_t>(toEpollEvents(interest));
+        
+        flags |= EV_ONESHOT;
+        if (mode == Mode::Edge) flags |= EV_CLEAR;
+        
+        EV_SET(&ke, fd, filter, flags, 0, 0, (void*) tag.value_);
+        TRY(kevent(poll_id, &ke, 1, NULL, 0, NULL));
+    }
+    
+    // Additional param: interest, since kqueue filters are unique tuples (ident|filter|udata)
+    void Epoll::removeFd(Fd fd, Flags<NotifyOn> interest) {
+        //        struct epoll_event ev;
+        //        TRY(epoll_ctl(poll_id, EPOLL_CTL_DEL, fd, &ev));
+        struct kevent ke;
+        ke.ident = static_cast<uintptr_t>(fd);
+        ke.filter = static_cast<int16_t>(toEpollEvents(interest));
+        ke.flags = EV_DELETE;
+        TRY(kevent(poll_id, &ke, 1, NULL, 0, NULL));
+        
+        std::cout << "Removed fd = " << fd << std::endl;
+    }
+    
+    void Epoll::rearmFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
+//        struct epoll_event ev;
+//        ev.events = toEpollEvents(interest);
+//        if (mode == Mode::Edge)
+//        ev.events |= EPOLLET;
+//        ev.data.u64 = tag.value_;
+//
+//        TRY(epoll_ctl(poll_id, EPOLL_CTL_MOD, fd, &ev));
+        
+        // Readding interest will modify the filedescriptor
+std::cout << "Rearm fd = " << fd << ", tag=" << tag.value_ << std::endl;
+        return addFd(fd, interest, tag, mode);
+    }
+    
+    int Epoll::poll(std::vector<Event> &events,
+                    const std::chrono::milliseconds timeout) const {
+//        struct epoll_event evs[Const::MaxEvents];
+//
+//        int ready_fds = -1;
+//        do {
+//            ready_fds = ::epoll_wait(poll_id, evs, Const::MaxEvents, static_cast<int>(timeout.count()));
+//        } while (ready_fds < 0 && errno == EINTR);
+//
+//        for (int i = 0; i < ready_fds; ++i) {
+//            const struct epoll_event *ev = evs + i;
+//
+//            const Tag tag(ev->data.u64);
+//
+//            Event event(tag);
+//            event.flags = toNotifyOn(ev->events);
+//            events.push_back(event);
+//        }
+//
+//        return ready_fds;
+        struct kevent triggered[Const::MaxEvents]; // Big stack overhead, should output this to calling instance.
+        struct timespec to = { 0, 0 };
+        int n_triggered_events = -1;
+        
+        if (timeout.count() > 0) {
+            to.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(timeout).count();
+            to.tv_nsec = std::chrono::duration_cast<std::chrono::microseconds>(timeout).count();
+        }
+        
+        do {
+            n_triggered_events = kevent(poll_id, NULL, 0, &triggered[0], Const::MaxEvents, &to);
+        } while (n_triggered_events < 0 && errno == EINTR);
+        
+        for (int i = 0; i < n_triggered_events; ++i) {
+            const struct kevent* ev = triggered + i;
+            const Tag tag(reinterpret_cast<uint64_t>(ev->udata));
+            
+//            std::cerr << "triggered_event with value = " << reinterpret_cast<uint64_t>(ev->udata) << std::endl; // YOSHI
+            
+            // Create Event object and push it to result list.
+            Event event(tag);
+            event.flags = toNotifyOn(ev->filter);
+            if (ev->flags & EV_EOF) { event.flags.setFlag(NotifyOn::Shutdown);
+                
+                std::cerr << "Shutdown " << std::endl; // Yoshi
+            }
+            events.push_back(event);
+        }
+        
+        
+//        std::cerr << "n_triggered_events=" << n_triggered_events << std::endl;
+        
+        return n_triggered_events;
+    }
+    
+    int Epoll::toEpollEvents(const Flags<NotifyOn> &interest) {
+        int events = 0;
+        
+        if (interest.hasFlag(NotifyOn::Read))
+            events |= EVFILT_READ;
+        if (interest.hasFlag(NotifyOn::Write))
+            events |= EVFILT_WRITE;
+        if (interest.hasFlag(NotifyOn::Hangup))
+            events |= EVFILT_EXCEPT;
+        if (interest.hasFlag(NotifyOn::Shutdown))
+            events |= EVFILT_EXCEPT;
+        
+        if (false) {
+        if (interest.hasFlag(NotifyOn::Read))
+        std::cerr << "toEpollEvents => read" << std::endl;  // YOSHI
+        if (interest.hasFlag(NotifyOn::Write))
+        std::cerr << "toEpollEvents => write" << std::endl;
+        if (interest.hasFlag(NotifyOn::Hangup))
+        std::cerr << "toEpollEvents => hangup" << std::endl;
+        if (interest.hasFlag(NotifyOn::Shutdown))
+        std::cerr << "toEpollEvents => shutdown" << std::endl;
+        }
+        
+        return events;
+    }
+    
+    Flags<NotifyOn> Epoll::toNotifyOn(int events) {
+        Flags<NotifyOn> flags;
+        
+        if (events & EVFILT_READ)
+        flags.setFlag(NotifyOn::Read);
+        if (events & EVFILT_WRITE)
+        flags.setFlag(NotifyOn::Write);
+        if (events & EVFILT_EXCEPT) {
+            flags.setFlag(NotifyOn::Hangup);
+        }
+        
+        return flags;
+    }
+    
+} // namespace Polling
+    
+#else
 
+namespace Polling {
+    
 Event::Event(Tag _tag) : flags(), fd(-1), tag(_tag) {}
 
 Epoll::Epoll()
-    : epoll_fd([&]() { return TRY_RET(epoll_create(Const::MaxEvents)); }()) {}
+    : poll_id([&]() { return TRY_RET(epoll_create(Const::MaxEvents)); }()) {}
 
 Epoll::~Epoll() {
-  if (epoll_fd >= 0) {
-    close(epoll_fd);
+  if (poll_id >= 0) {
+    close(poll_id);
   }
 }
 
@@ -136,7 +321,7 @@ void Epoll::addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
     ev.events |= EPOLLET;
   ev.data.u64 = tag.value_;
 
-  TRY(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
+  TRY(epoll_ctl(poll_id, EPOLL_CTL_ADD, fd, &ev));
 }
 
 void Epoll::addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
@@ -147,12 +332,12 @@ void Epoll::addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
     ev.events |= EPOLLET;
   ev.data.u64 = tag.value_;
 
-  TRY(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev));
+  TRY(epoll_ctl(poll_id, EPOLL_CTL_ADD, fd, &ev));
 }
 
 void Epoll::removeFd(Fd fd) {
   struct epoll_event ev;
-  TRY(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, &ev));
+  TRY(epoll_ctl(poll_id, EPOLL_CTL_DEL, fd, &ev));
 }
 
 void Epoll::rearmFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
@@ -162,7 +347,7 @@ void Epoll::rearmFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
     ev.events |= EPOLLET;
   ev.data.u64 = tag.value_;
 
-  TRY(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev));
+  TRY(epoll_ctl(poll_id, EPOLL_CTL_MOD, fd, &ev));
 }
 
 int Epoll::poll(std::vector<Event> &events,
@@ -171,7 +356,7 @@ int Epoll::poll(std::vector<Event> &events,
 
   int ready_fds = -1;
   do {
-    ready_fds = ::epoll_wait(epoll_fd, evs, Const::MaxEvents, static_cast<int>(timeout.count()));
+    ready_fds = ::epoll_wait(poll_id, evs, Const::MaxEvents, static_cast<int>(timeout.count()));
   } while (ready_fds < 0 && errno == EINTR);
 
   for (int i = 0; i < ready_fds; ++i) {
@@ -217,41 +402,45 @@ Flags<NotifyOn> Epoll::toNotifyOn(int events) {
 
   return flags;
 }
-
+    
 } // namespace Polling
-
-NotifyFd::NotifyFd() : event_fd(-1) {}
+#endif // __MACH__
+    
+NotifyFd::NotifyFd() : event_id(-1) {}
 
 Polling::Tag NotifyFd::bind(Polling::Epoll &poller) {
-  event_fd = TRY_RET(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
-  Polling::Tag tag(event_fd);
+  event_id = TRY_RET(event_init(0, EFD_NONBLOCK | EFD_CLOEXEC));
+  Polling::Tag tag(event_id);
 
-  poller.addFd(event_fd, Flags<Polling::NotifyOn>(Polling::NotifyOn::Read), tag,
+  poller.addFd(event_id, Flags<Polling::NotifyOn>(Polling::NotifyOn::Read), tag,
                Polling::Mode::Edge);
   return tag;
 }
 
-bool NotifyFd::isBound() const { return event_fd != -1; }
+bool NotifyFd::isBound() const { return event_id != -1; }
 
-Polling::Tag NotifyFd::tag() const { return Polling::Tag(event_fd); }
+Polling::Tag NotifyFd::tag() const { return Polling::Tag(event_id); }
 
 void NotifyFd::notify() const {
   if (!isBound())
     throw std::runtime_error("Can not notify an unbound fd");
-  eventfd_t val = 1;
-  TRY(eventfd_write(event_fd, val));
+  EventValue val = 1;
+    
+    std::cout << "notify() from os.cc" << std::endl; // YOSHI
+  TRY(event_notify(event_id, val));
 }
 
 void NotifyFd::read() const {
+    std::cout << "read() from os.cc" << std::endl; // YOSHI
   if (!isBound())
     throw std::runtime_error("Can not read an unbound fd");
-  eventfd_t val;
-  TRY(eventfd_read(event_fd, &val));
+  EventValue val;
+  TRY(event_test(event_id, &val));
 }
 
 bool NotifyFd::tryRead() const {
-  eventfd_t val;
-  int res = eventfd_read(event_fd, &val);
+  EventValue val;
+  int res = event_test(event_id, &val);
   if (res == -1) {
     if (errno == EAGAIN || errno == EWOULDBLOCK)
       return false;

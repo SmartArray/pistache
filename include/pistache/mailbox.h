@@ -11,8 +11,9 @@
 #include <stdexcept>
 
 #include <array>
-#include <sys/eventfd.h>
 #include <unistd.h>
+
+#include <pistache/event.h>
 
 #include <pistache/common.h>
 #include <pistache/os.h>
@@ -54,14 +55,14 @@ private:
 
 template <typename T> class PollableMailbox : public Mailbox<T> {
 public:
-  PollableMailbox() : event_fd(-1) {}
+  PollableMailbox() : event_id(-1) {}
 
   ~PollableMailbox() {
-    if (event_fd != -1)
-      close(event_fd);
+    if (event_id != -1)
+      close(event_id);
   }
 
-  bool isBound() const { return event_fd != -1; }
+  bool isBound() const { return event_id != -1; }
 
   Polling::Tag bind(Polling::Epoll &poller) {
     using namespace Polling;
@@ -70,9 +71,9 @@ public:
       throw std::runtime_error("The mailbox has already been bound");
     }
 
-    event_fd = TRY_RET(eventfd(0, EFD_NONBLOCK));
-    Tag tag_(event_fd);
-    poller.addFd(event_fd, Flags<Polling::NotifyOn>(NotifyOn::Read), tag_);
+    event_id = TRY_RET(event_init(0, EFD_NONBLOCK));
+    Tag tag_(event_id);
+    poller.addFd(event_id, Flags<Polling::NotifyOn>(NotifyOn::Read), tag_);
 
     return tag_;
   }
@@ -82,7 +83,12 @@ public:
 
     if (isBound()) {
       uint64_t val = 1;
-      TRY(write(event_fd, &val, sizeof val));
+#ifdef __MACH__
+      TRY(event_notify(event_id, val));
+      std::cout << "> event_notify from post()" << std::endl;
+#else
+      TRY(write(event_id, &val, sizeof val));
+#endif // __MACH__
     }
 
     return _ret;
@@ -94,7 +100,22 @@ public:
     if (isBound()) {
       uint64_t val;
       for (;;) {
-        ssize_t bytes = read(event_fd, &val, sizeof val);
+#ifdef __MACH__
+        // kqueue event will simply return 0 if event was not triggered.
+        int bytes = event_test(event_id, &val);
+        std::cout << "> event_test from clear()" << std::endl;
+        if (bytes <= 1) break;
+        
+        if (bytes <= 0) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK || bytes == 0) {
+            break;
+          } else {
+            std::cout << "warn" << std::endl;
+          }
+        }
+#else
+        ssize_t bytes = read(event_id, &val, sizeof val);
+
         if (bytes == -1) {
           if (errno == EAGAIN || errno == EWOULDBLOCK)
             break;
@@ -102,6 +123,7 @@ public:
             // TODO
           }
         }
+#endif // __MACH__
       }
     }
 
@@ -112,20 +134,20 @@ public:
     if (!isBound())
       throw std::runtime_error("Can not retrieve tag of an unbound mailbox");
 
-    return Polling::Tag(event_fd);
+    return Polling::Tag(event_id);
   }
 
   void unbind(Polling::Epoll &poller) {
-    if (event_fd == -1) {
+    if (event_id == -1) {
       throw std::runtime_error("The mailbox is not bound");
     }
 
-    poller.removeFd(event_fd);
-    close(event_fd), event_fd = -1;
+    poller.removeFd(event_id, Flags<Polling::NotifyOn>(Polling::NotifyOn::Read));
+    close(event_id), event_id = -1;
   }
 
 private:
-  int event_fd;
+  EventId event_id;
 };
 
 /*
@@ -218,14 +240,14 @@ template <typename T> class PollableQueue : public Queue<T> {
 public:
   typedef typename Queue<T>::Entry Entry;
 
-  PollableQueue() : event_fd(-1) {}
+  PollableQueue() : event_id(-1) {}
 
   ~PollableQueue() {
-    if (event_fd != -1)
-      close(event_fd);
+    if (event_id != -1)
+      close(event_id);
   }
 
-  bool isBound() const { return event_fd != -1; }
+  bool isBound() const { return event_id != -1; }
 
   Polling::Tag bind(Polling::Epoll &poller) {
     using namespace Polling;
@@ -234,9 +256,9 @@ public:
       throw std::runtime_error("The queue has already been bound");
     }
 
-    event_fd = TRY_RET(eventfd(0, EFD_NONBLOCK));
-    Tag tag_(event_fd);
-    poller.addFd(event_fd, Flags<Polling::NotifyOn>(NotifyOn::Read), tag_);
+    event_id = TRY_RET(event_init(0, EFD_NONBLOCK));
+    Tag tag_(event_id);
+    poller.addFd(event_id, Flags<Polling::NotifyOn>(NotifyOn::Read), tag_);
 
     return tag_;
   }
@@ -246,7 +268,13 @@ public:
 
     if (isBound()) {
       uint64_t val = 1;
-      TRY(write(event_fd, &val, sizeof val));
+        // write to kqueue not allowed!!! Either use pipe or other call
+#ifdef __MACH__
+      TRY(event_notify(event_id, val));
+      std::cout << "> event_notify from push()" << std::endl; // YOSHI
+#else
+      TRY(write(event_id, &val, sizeof val));
+#endif // __MACH__
     }
   }
 
@@ -256,7 +284,22 @@ public:
     if (isBound()) {
       uint64_t val;
       for (;;) {
-        ssize_t bytes = read(event_fd, &val, sizeof val);
+#ifdef __MACH__
+        // kqueue event poll will simply return 0, if there is no data
+        int bytes = event_test(event_id, &val);
+        std::cout << "> event_test from pop(), bytes = " << bytes << std::endl; // YOSHI
+        if (bytes == 1) break;
+        
+        if (bytes <= 0) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK || bytes == 0) {
+            break;
+          } else {
+            std::cout << "warn" << std::endl;
+          }
+        }
+#else
+        ssize_t bytes = read(event_id, &val, sizeof val);
+
         if (bytes == -1) {
           if (errno == EAGAIN || errno == EWOULDBLOCK)
             break;
@@ -264,6 +307,7 @@ public:
             // TODO
           }
         }
+#endif // __MACH__
       }
     }
 
@@ -274,20 +318,20 @@ public:
     if (!isBound())
       throw std::runtime_error("Can not retrieve tag of an unbound mailbox");
 
-    return Polling::Tag(event_fd);
+    return Polling::Tag(event_id);
   }
 
   void unbind(Polling::Epoll &poller) {
-    if (event_fd == -1) {
+    if (event_id == -1) {
       throw std::runtime_error("The mailbox is not bound");
     }
 
-    poller.removeFd(event_fd);
-    close(event_fd), event_fd = -1;
+    poller.removeFd(event_id, Flags<Polling::NotifyOn>(Polling::NotifyOn::Read));
+    close(event_id), event_id = -1;
   }
 
 private:
-  int event_fd;
+  EventId event_id;
 };
 
 // A Multi-Producer Multi-Consumer bounded queue

@@ -15,8 +15,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <sys/timerfd.h>
-
 #include <pistache/async.h>
 #include <pistache/cookie.h>
 #include <pistache/http_defs.h>
@@ -26,6 +24,7 @@
 #include <pistache/stream.h>
 #include <pistache/tcp.h>
 #include <pistache/transport.h>
+#include <pistache/timer.h>
 
 namespace Pistache {
 namespace Tcp {
@@ -233,7 +232,7 @@ public:
 
   template <typename Duration> void arm(Duration duration) {
     Async::Promise<uint64_t> p([=](Async::Deferred<uint64_t> deferred) {
-      timerFd = TRY_RET(timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK));
+      timerFd = TRY_RET(timer_init(CLOCK_MONOTONIC, TFD_NONBLOCK, 1));
       transport->armTimer(timerFd, duration, std::move(deferred));
     });
 
@@ -321,6 +320,7 @@ ResponseStream &operator<<(ResponseStream &stream, const T &val) {
 
 inline ResponseStream &operator<<(ResponseStream &stream,
                                   ResponseStream &(*func)(ResponseStream &)) {
+  // cppcheck-suppress returnTempReference
   return (*func)(stream);
 }
 

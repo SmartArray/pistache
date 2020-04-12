@@ -6,6 +6,10 @@
 
 #include <pistache/reactor.h>
 
+#ifdef __MACH__
+#include <pthread.h>
+#endif // __MACH__
+
 #include <array>
 #include <atomic>
 #include <memory>
@@ -430,8 +434,12 @@ private:
     void run() {
       thread = std::thread([=]() {
         if (threadsName_.size() > 0) {
+#ifdef __MACH__
+          pthread_setname_np(threadsName_.substr(0, 15).c_str());
+#else
           pthread_setname_np(pthread_self(),
                              threadsName_.substr(0, 15).c_str());
+#endif // __MACH__
         }
         sync->run();
       });

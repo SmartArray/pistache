@@ -11,7 +11,7 @@
 #include <pistache/stream.h>
 
 #include <netdb.h>
-#include <sys/sendfile.h>
+//#include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -298,6 +298,7 @@ void Transport::asyncSendRequestImpl(const RequestEntry &req,
 void Transport::handleRequestsQueue() {
   // Let's drain the queue
   for (;;) {
+      std::cout << "requestsQueue.popSafe()" << std::endl; // YOSHI
     auto req = requestsQueue.popSafe();
     if (!req)
       break;
@@ -308,6 +309,7 @@ void Transport::handleRequestsQueue() {
 
 void Transport::handleConnectionQueue() {
   for (;;) {
+      std::cout << "connectionsQueue.popSafe()" << std::endl; // YOSHI
     auto data = connectionsQueue.popSafe();
     if (!data)
       break;
@@ -627,6 +629,7 @@ void Connection::performImpl(const Http::Request &request,
 
 void Connection::processRequestQueue() {
   for (;;) {
+      std::cout << "requestsQueue.popSafe()" << std::endl; // YOSHI
     auto req = requestsQueue.popSafe();
     if (!req)
       break;

@@ -5,14 +5,25 @@
 
 */
 
-#include <sys/sendfile.h>
-#include <sys/timerfd.h>
+#ifdef __MACH__
+    // sendfile
+    #include <sys/types.h>
+    #include <sys/socket.h>
+    #include <sys/uio.h>
+    // getrusage
+    #include <sys/resource.h>
+#else
+    #include <sys/time.h>
+#endif
+
+#include <sys/resource.h>
 
 #include <pistache/os.h>
 #include <pistache/peer.h>
 #include <pistache/tcp.h>
 #include <pistache/transport.h>
 #include <pistache/utils.h>
+#include <pistache/timer.h>
 
 namespace Pistache {
 
@@ -27,6 +38,10 @@ Transport::Transport(const std::shared_ptr<Tcp::Handler> &handler) {
 void Transport::init(const std::shared_ptr<Tcp::Handler> &handler) {
   handler_ = handler;
   handler_->associateTransport(this);
+    
+#ifdef __MACH__
+  kq = timer_store();
+#endif
 }
 
 std::shared_ptr<Aio::Handler> Transport::clone() const {
@@ -43,12 +58,14 @@ void Transport::registerPoller(Polling::Epoll &poller) {
 void Transport::handleNewPeer(const std::shared_ptr<Tcp::Peer> &peer) {
   auto ctx = context();
   const bool isInRightThread = std::this_thread::get_id() == ctx.thread();
+    
   if (!isInRightThread) {
     PeerEntry entry(peer);
     peersQueue.push(std::move(entry));
   } else {
     handlePeer(peer);
   }
+    
   int fd = peer->fd();
   {
     Guard guard(toWriteLock);
@@ -58,17 +75,23 @@ void Transport::handleNewPeer(const std::shared_ptr<Tcp::Peer> &peer) {
 
 void Transport::onReady(const Aio::FdSet &fds) {
   for (const auto &entry : fds) {
+      std::cout << "onReady()" << std::endl;
     if (entry.getTag() == writesQueue.tag()) {
+        std::cout << "  writeQueue" << std::endl;
       handleWriteQueue();
     } else if (entry.getTag() == timersQueue.tag()) {
       handleTimerQueue();
+        std::cout << "  timersQueue" << std::endl;
     } else if (entry.getTag() == peersQueue.tag()) {
       handlePeerQueue();
+        std::cout << "  peersQueue" << std::endl;
     } else if (entry.getTag() == notifier.tag()) {
       handleNotify();
+        std::cout << "  notify" << std::endl;
     }
 
     else if (entry.isReadable()) {
+        std::cout << "  is readable" << std::endl;
       auto tag = entry.getTag();
       if (isPeerFd(tag)) {
         auto &peer = getPeer(tag);
@@ -83,6 +106,7 @@ void Transport::onReady(const Aio::FdSet &fds) {
       }
 
     } else if (entry.isWritable()) {
+        std::cout << "  is writable" << std::endl;
       auto tag = entry.getTag();
       auto fd = static_cast<Fd>(tag.value());
 
@@ -98,6 +122,7 @@ void Transport::onReady(const Aio::FdSet &fds) {
       reactor()->modifyFd(key(), fd, NotifyOn::Read, Polling::Mode::Edge);
 
       // Try to drain the queue
+        std::cout << "  call asyncWrite" << std::endl;
       asyncWriteImpl(fd);
     }
   }
@@ -191,6 +216,7 @@ void Transport::asyncWriteImpl(Fd fd) {
     if (it == std::end(toWrite)) {
       return;
     }
+      
     auto &wq = it->second;
     if (wq.size() == 0) {
       break;
@@ -251,7 +277,11 @@ void Transport::asyncWriteImpl(Fd fd) {
           bytesWritten = SSL_sendfile(ssl_, file, &offset, len);
         } else {
 #endif /* PISTACHE_USE_SSL */
+#if __MACH__
+          bytesWritten = ::sendfile(fd, file, offset, &offset, NULL, 0);
+#else
           bytesWritten = ::sendfile(fd, file, &offset, len);
+#endif // __MACH__
 #ifdef PISTACHE_USE_SSL
         }
 #endif /* PISTACHE_USE_SSL */
@@ -323,22 +353,7 @@ void Transport::armTimerMsImpl(TimerEntry entry) {
     return;
   }
 
-  itimerspec spec;
-  spec.it_interval.tv_sec = 0;
-  spec.it_interval.tv_nsec = 0;
-
-  if (entry.value.count() < 1000) {
-    spec.it_value.tv_sec = 0;
-    spec.it_value.tv_nsec =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(entry.value)
-            .count();
-  } else {
-    spec.it_value.tv_sec =
-        std::chrono::duration_cast<std::chrono::seconds>(entry.value).count();
-    spec.it_value.tv_nsec = 0;
-  }
-
-  int res = timerfd_settime(entry.fd, 0, &spec, 0);
+  int res = timer_set(kq, entry.fd, entry.value);
   if (res == -1) {
     entry.deferred.reject(Pistache::Error::system("Could not set timer time"));
     return;
@@ -352,9 +367,12 @@ void Transport::armTimerMsImpl(TimerEntry entry) {
 void Transport::handleWriteQueue() {
   // Let's drain the queue
   for (;;) {
+      std::cout << "writesQueue.popSafe()" << std::endl; // YOSHI
     auto write = writesQueue.popSafe();
-    if (!write)
+      if (!write) {
+          std::cout << "BREAK" << std::endl; // YOSHI
       break;
+      }
 
     auto fd = write->peerFd;
     if (!isPeerFd(fd))
@@ -372,6 +390,7 @@ void Transport::handleWriteQueue() {
 
 void Transport::handleTimerQueue() {
   for (;;) {
+      std::cout << "timersQueue.popSafe()" << std::endl; // YOSHI
     auto timer = timersQueue.popSafe();
     if (!timer)
       break;
@@ -382,10 +401,10 @@ void Transport::handleTimerQueue() {
 
 void Transport::handlePeerQueue() {
   for (;;) {
+      std::cout << "handlePeerQueue" << std::endl; // YOSHI
     auto data = peersQueue.popSafe();
     if (!data)
       break;
-
     handlePeer(data->peer);
   }
 }
@@ -406,8 +425,13 @@ void Transport::handleNotify() {
     ;
 
   rusage now;
-
+    
+#ifdef __MACH__
+  auto res = getrusage(RUSAGE_SELF, &now);
+#else
   auto res = getrusage(RUSAGE_THREAD, &now);
+#endif // __MACH__
+    
   if (res == -1)
     loadRequest_.reject(std::runtime_error("Could not compute usage"));
 

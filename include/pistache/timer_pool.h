@@ -48,10 +48,21 @@ public:
 
     void registerReactor(const Aio::Reactor::Key &key, Aio::Reactor *reactor);
 
+    #ifdef __MACH__
+      // KQueue reference.
+      int kq;
+        
+      // Unique TimerID
+      size_t uid;
+    #endif
+      
   private:
     void armMs(std::chrono::milliseconds value);
     enum class State : uint32_t { Idle, Used };
     std::atomic<uint32_t> state;
+      
+    // BSD will store the unique timer id in fd_.
+    // See contructor.
     Fd fd_;
     bool registered;
   };
@@ -61,6 +72,10 @@ public:
 
 private:
   std::vector<std::shared_ptr<Entry>> timers;
+
+#ifdef __MACH__
+  int kq;
+#endif
 };
 
 } // namespace Pistache
