@@ -80,7 +80,9 @@ void Transport::handleNewPeer(const std::shared_ptr<Tcp::Peer> &peer) {
 
 void Transport::onReady(const Aio::FdSet &fds) {
   for (const auto &entry : fds) {
-      std::cout << "onReady()" << std::endl;
+    std::cout << "onReady()" << std::endl; // YOSHI
+//    printStacktrace();
+    
     if (entry.getTag() == writesQueue.tag()) {
         std::cout << "  writeQueue" << std::endl;
       handleWriteQueue();
@@ -117,6 +119,7 @@ void Transport::onReady(const Aio::FdSet &fds) {
 
       {
         Guard guard(toWriteLock);
+        std::cout << "Lookup Writedata " << fd << std::endl;
         auto it = toWrite.find(fd);
         if (it == std::end(toWrite)) {
           throw std::runtime_error(
@@ -374,10 +377,10 @@ void Transport::handleWriteQueue() {
   for (;;) {
       std::cout << "writesQueue.popSafe()" << std::endl; // YOSHI
     auto write = writesQueue.popSafe();
-      if (!write) {
-          std::cout << "BREAK" << std::endl; // YOSHI
+    if (!write) {
+      std::cout << "BREAK" << std::endl; // YOSHI
       break;
-      }
+    }
 
     auto fd = write->peerFd;
     if (!isPeerFd(fd))
@@ -385,6 +388,7 @@ void Transport::handleWriteQueue() {
 
     {
       Guard guard(toWriteLock);
+      std::cout << "Adding write data for fd = " << fd << std::endl;
       toWrite[fd].push_back(std::move(*write));
     }
 

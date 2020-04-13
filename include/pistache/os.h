@@ -85,6 +85,7 @@ struct Tag {
   constexpr uint64_t value() const { return value_; }
 
   friend constexpr bool operator==(Tag lhs, Tag rhs);
+  friend constexpr bool operator<(Tag lhs, Tag rhs) { return lhs.value_ < rhs.value_; }
 
 private:
   uint64_t value_;
@@ -107,11 +108,11 @@ public:
   Epoll();
   ~Epoll();
 
-  void addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode = Mode::Level);
+  void addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode = Mode::Level, uint16_t initialFlags = 0);
   void addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag,
                     Mode mode = Mode::Level);
 
-  void removeFd(Fd fd, Flags<NotifyOn> interest);
+  void removeFd(Fd fd);
   void rearmFd(Fd fd, Flags<NotifyOn> interest, Tag tag,
                Mode mode = Mode::Level);
 

@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/time.h>
+#include <map>
 #else // __MACH__
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -125,9 +126,20 @@ cpu_set_t CpuSet::toPosix() const {
 
 #ifdef __MACH__
 //#include <pistache/polling_compat.h>
-    
+    #include <stdio.h> // YOSHI REMOVE
+    #include <sys/stat.h>
 namespace Polling {
-    
+        
+    int getNumberOfEvents(int fd) {
+        struct stat s;
+        int rc = fstat(fd, &s);
+        if (rc == -1) perror("fstat");
+        
+        std::cout << "add " << (s.st_mode & S_IFSOCK ? 3 : 1) << " events" << std::endl;
+        
+        return s.st_mode & S_IFSOCK ? 2 : 1;
+    }
+
     Event::Event(Tag _tag) : flags(), fd(-1), tag(_tag) {}
     
     Epoll::Epoll()
@@ -141,159 +153,122 @@ namespace Polling {
         }
     }
     
-    void Epoll::addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
-std::cout << "addFd fd=" << fd << " with value = " << tag.value_ << std::endl;  // YOSHI
-        struct kevent ke;
-        uint16_t flags = EV_ADD | EV_EOF | EV_ENABLE;
-        uint16_t filter = static_cast<uint16_t>(toEpollEvents(interest));
+    void Epoll::addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode, uint16_t initialFlags) {
+        std::cout << "addFd fd=" << fd << " to kq=" << poll_id << " with value = " << tag.value_ << std::endl;  // YOSHI
         
+        // event.filter does not contain bit fields.
+        // They have numeric identifiers. (-1, -2, etc.)
+        // Hence, we need to create one event for each flag that there is.
+        struct kevent ke[3];
+        struct timespec t = { 0, 0 };
+        
+        // Determine flags
+        uint16_t flags = initialFlags | EV_ADD;
         if (mode == Mode::Edge) flags |= EV_CLEAR;
+
+        // Setup read event
+        EV_SET(
+               &ke[0],
+               fd,
+               EVFILT_READ,
+               flags | (interest.hasFlag(NotifyOn::Read) ? EV_ENABLE : EV_DISABLE),
+               0,
+               0,
+               (void*) tag.value_
+        );
         
-        EV_SET(&ke, fd, filter, flags, 0, 0, (void*) tag.value_);
-        TRY(kevent(poll_id, &ke, 1, NULL, 0, NULL));
+        // Setup write event
+        EV_SET(
+               &ke[1],
+               fd,
+               EVFILT_WRITE,
+               flags | (interest.hasFlag(NotifyOn::Write) ? EV_ENABLE : EV_DISABLE),
+               0,
+               0,
+               (void*) tag.value_
+        );
+
+        // Add the required events.
+        TRY(kevent(poll_id, &ke[0], getNumberOfEvents(fd), NULL, 0, &t));
     }
     
     void Epoll::addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
-//        struct epoll_event ev;
-//        ev.events = toEpollEvents(interest);
-//        ev.events |= EPOLLONESHOT;
-//        if (mode == Mode::Edge)
-//        ev.events |= EPOLLET;
-//        ev.data.u64 = tag.value_;
-//
-//        TRY(epoll_ctl(poll_id, EPOLL_CTL_ADD, fd, &ev));
-std::cout << "addFdOneShot with value = " << tag.value_ << std::endl;  // YOSHI
-        
-        struct kevent ke;
-        uint16_t flags = EV_ADD | EV_EOF | EV_ENABLE;
-        uint16_t filter = static_cast<uint16_t>(toEpollEvents(interest));
-        
-        flags |= EV_ONESHOT;
-        if (mode == Mode::Edge) flags |= EV_CLEAR;
-        
-        EV_SET(&ke, fd, filter, flags, 0, 0, (void*) tag.value_);
-        TRY(kevent(poll_id, &ke, 1, NULL, 0, NULL));
+        addFd(fd, interest, tag, mode, EV_ONESHOT);
     }
     
-    // Additional param: interest, since kqueue filters are unique tuples (ident|filter|udata)
-    void Epoll::removeFd(Fd fd, Flags<NotifyOn> interest) {
-        //        struct epoll_event ev;
-        //        TRY(epoll_ctl(poll_id, EPOLL_CTL_DEL, fd, &ev));
-        struct kevent ke;
-        ke.ident = static_cast<uintptr_t>(fd);
-        ke.filter = static_cast<int16_t>(toEpollEvents(interest));
-        ke.flags = EV_DELETE;
-        TRY(kevent(poll_id, &ke, 1, NULL, 0, NULL));
-        
-        std::cout << "Removed fd = " << fd << std::endl;
+    void Epoll::removeFd(Fd fd) {
+        struct kevent ke[3];
+
+        // Setup removal for READ and WRITE events.
+        EV_SET(&ke[0], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+        EV_SET(&ke[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+
+        TRY(kevent(poll_id, &ke[0], getNumberOfEvents(fd), NULL, 0, NULL));
     }
     
     void Epoll::rearmFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
-//        struct epoll_event ev;
-//        ev.events = toEpollEvents(interest);
-//        if (mode == Mode::Edge)
-//        ev.events |= EPOLLET;
-//        ev.data.u64 = tag.value_;
-//
-//        TRY(epoll_ctl(poll_id, EPOLL_CTL_MOD, fd, &ev));
-        
-        // Readding interest will modify the filedescriptor
-std::cout << "Rearm fd = " << fd << ", tag=" << tag.value_ << std::endl;
         return addFd(fd, interest, tag, mode);
     }
     
     int Epoll::poll(std::vector<Event> &events,
                     const std::chrono::milliseconds timeout) const {
-//        struct epoll_event evs[Const::MaxEvents];
-//
-//        int ready_fds = -1;
-//        do {
-//            ready_fds = ::epoll_wait(poll_id, evs, Const::MaxEvents, static_cast<int>(timeout.count()));
-//        } while (ready_fds < 0 && errno == EINTR);
-//
-//        for (int i = 0; i < ready_fds; ++i) {
-//            const struct epoll_event *ev = evs + i;
-//
-//            const Tag tag(ev->data.u64);
-//
-//            Event event(tag);
-//            event.flags = toNotifyOn(ev->events);
-//            events.push_back(event);
-//        }
-//
-//        return ready_fds;
         struct kevent triggered[Const::MaxEvents]; // Big stack overhead, should output this to calling instance.
         struct timespec to = { 0, 0 };
         int n_triggered_events = -1;
         
+        // Convert chrono to timespec.
         if (timeout.count() > 0) {
             to.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(timeout).count();
             to.tv_nsec = std::chrono::duration_cast<std::chrono::microseconds>(timeout).count();
         }
         
+        // Get number of triggered events.
         do {
             n_triggered_events = kevent(poll_id, NULL, 0, &triggered[0], Const::MaxEvents, &to);
         } while (n_triggered_events < 0 && errno == EINTR);
+        
+        std::map<Tag, Flags<NotifyOn>> aggregated;
+        std::map<Tag, Flags<NotifyOn>>::iterator item;
         
         for (int i = 0; i < n_triggered_events; ++i) {
             const struct kevent* ev = triggered + i;
             const Tag tag(reinterpret_cast<uint64_t>(ev->udata));
             
-//            std::cerr << "triggered_event with value = " << reinterpret_cast<uint64_t>(ev->udata) << std::endl; // YOSHI
+            Flags<NotifyOn> flags;
             
-            // Create Event object and push it to result list.
-            Event event(tag);
-            event.flags = toNotifyOn(ev->filter);
-            if (ev->flags & EV_EOF) { event.flags.setFlag(NotifyOn::Shutdown);
-                
-                std::cerr << "Shutdown " << std::endl; // Yoshi
-            }
+            // Use aggregated flags for fd, if any.
+            if ((item = aggregated.find(tag)) != aggregated.end())
+                flags = item->second;
+            
+            // Update output flags.
+            if (ev->filter == EVFILT_READ)
+                flags.setFlag(NotifyOn::Read);
+            if (ev->filter == EVFILT_WRITE)
+                flags.setFlag(NotifyOn::Write);
+            if (ev->flags & EV_EOF)
+                flags.setFlag(NotifyOn::Shutdown);
+            
+            aggregated[tag] = flags;
+        }
+        
+        // Create Event objects and push them to result list.
+        for (item = aggregated.begin(); item != aggregated.end(); ++item) {
+            Event event(item->first);
+            event.flags = item->second;
             events.push_back(event);
         }
         
-        
-//        std::cerr << "n_triggered_events=" << n_triggered_events << std::endl;
-        
         return n_triggered_events;
     }
-    
+
+    // Obsolete for Mac OS / BSD.
     int Epoll::toEpollEvents(const Flags<NotifyOn> &interest) {
-        int events = 0;
-        
-        if (interest.hasFlag(NotifyOn::Read))
-            events |= EVFILT_READ;
-        if (interest.hasFlag(NotifyOn::Write))
-            events |= EVFILT_WRITE;
-        if (interest.hasFlag(NotifyOn::Hangup))
-            events |= EVFILT_EXCEPT;
-        if (interest.hasFlag(NotifyOn::Shutdown))
-            events |= EVFILT_EXCEPT;
-        
-        if (false) {
-        if (interest.hasFlag(NotifyOn::Read))
-        std::cerr << "toEpollEvents => read" << std::endl;  // YOSHI
-        if (interest.hasFlag(NotifyOn::Write))
-        std::cerr << "toEpollEvents => write" << std::endl;
-        if (interest.hasFlag(NotifyOn::Hangup))
-        std::cerr << "toEpollEvents => hangup" << std::endl;
-        if (interest.hasFlag(NotifyOn::Shutdown))
-        std::cerr << "toEpollEvents => shutdown" << std::endl;
-        }
-        
-        return events;
+        return 0;
     }
     
+    // Obsolete for Mac OS / BSD.
     Flags<NotifyOn> Epoll::toNotifyOn(int events) {
         Flags<NotifyOn> flags;
-        
-        if (events & EVFILT_READ)
-        flags.setFlag(NotifyOn::Read);
-        if (events & EVFILT_WRITE)
-        flags.setFlag(NotifyOn::Write);
-        if (events & EVFILT_EXCEPT) {
-            flags.setFlag(NotifyOn::Hangup);
-        }
-        
         return flags;
     }
     
@@ -314,9 +289,9 @@ Epoll::~Epoll() {
   }
 }
 
-void Epoll::addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
+void Epoll::addFd(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode, uint16_t initialFlags) {
   struct epoll_event ev;
-  ev.events = toEpollEvents(interest);
+  ev.events = initialFlags | toEpollEvents(interest);
   if (mode == Mode::Edge)
     ev.events |= EPOLLET;
   ev.data.u64 = tag.value_;
@@ -335,7 +310,7 @@ void Epoll::addFdOneShot(Fd fd, Flags<NotifyOn> interest, Tag tag, Mode mode) {
   TRY(epoll_ctl(poll_id, EPOLL_CTL_ADD, fd, &ev));
 }
 
-void Epoll::removeFd(Fd fd, Flags<NotifyOn> interest) {
+void Epoll::removeFd(Fd fd) {
   struct epoll_event ev;
   TRY(epoll_ctl(poll_id, EPOLL_CTL_DEL, fd, &ev));
 }

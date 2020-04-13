@@ -326,7 +326,7 @@ public:
       throw std::runtime_error("The mailbox is not bound");
     }
 
-    poller.removeFd(event_id, Flags<Polling::NotifyOn>(Polling::NotifyOn::Read));
+    poller.removeFd(event_id);
     close(event_id), event_id = -1;
   }
 

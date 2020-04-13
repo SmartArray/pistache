@@ -213,10 +213,11 @@ void Listener::run() {
   for (;;) {
     std::vector<Polling::Event> events;
     int ready_fds = poller.poll(events);
-
+    
     if (ready_fds == -1) {
       throw Error::system("Polling"); // YOSHI
     }
+    
     for (const auto &event : events) {
       if (event.tag == shutdownFd.tag()) {
         std::cout << "SHUTDOWN" << std::endl; // YOSHI
@@ -225,10 +226,11 @@ void Listener::run() {
 
       if (event.flags.hasFlag(Polling::NotifyOn::Read)) {
         auto fd = event.tag.value();
-std::cout << "fd=" << fd << ", listen_fd=" << listen_fd << std::endl; // YOSHI
+        std::cout << "fd=" << fd << ", listen_fd=" << listen_fd << std::endl; // YOSHI
         
         if (static_cast<ssize_t>(fd) == listen_fd) {
           try {
+            std::cout << "newConnection()" << std::endl;
             handleNewConnection();
           } catch (SocketError &ex) {
             std::cerr << "Server: " << ex.what() << std::endl;

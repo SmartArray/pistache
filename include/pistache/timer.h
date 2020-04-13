@@ -18,13 +18,26 @@
 typedef int TimerStore; // kq
 typedef size_t TimerId;
 
+// YOSHI REMOVE
+#include <execinfo.h>
+#include <stdio.h>
+#include <unistd.h>
+inline void printStacktrace() {
+    void *array[100];
+    size_t size;
+    
+    size = backtrace(array, 100);
+    
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+}
+
 inline TimerStore timer_store() {
     TimerStore kq = kqueue();
     std::cout << "timer_store() kq=" << kq << std::endl; // YOSHI
     return kq;
 }
 
-inline TimerId timer_init(unsigned int initval, int flags, TimerId tid) {
+inline TimerId timer_init(unsigned int initval, int flags, TimerId tid = 1) {
     // Do nothing, except returning the timerid. Timer will be added with timer_set.
     // On Linux, a filedescriptor will be created using timerfd_create.
     std::cout << "timer_init() kq=" << tid << std::endl; // YOSHI

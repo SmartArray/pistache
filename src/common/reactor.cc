@@ -123,7 +123,6 @@ public:
     for (;;) {
       std::vector<Polling::Event> events;
       int ready_fds = poller.poll(events);
-
       switch (ready_fds) {
       case -1:
         break;
